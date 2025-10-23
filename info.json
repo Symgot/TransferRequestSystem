@@ -1,0 +1,13 @@
+{
+  "name": "TransferRequestSystem",
+  "version": "1.0.0",
+  "factorio_version": "2.0",
+  "title": "Transfer Request System",
+  "author": "Symgot",
+  "description": "Automatic item transfer system between space platforms in the same orbit. Platforms can request items from each other with configurable minimum and requested quantities. Requires Space Age DLC.",
+  "dependencies": [
+    "base >= 2.0.0",
+    "space-age >= 2.0.0",
+    "? CircuitRequestController"
+  ]
+}
