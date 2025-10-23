@@ -1,0 +1,127 @@
+name: Create Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Read info.json
+        id: read_info
+        run: |
+          MOD_NAME=$(jq -r '.name' info.json)
+          VERSION=$(jq -r '.version' info.json)
+          echo "mod_name=$MOD_NAME" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "release_tag=v$VERSION" >> $GITHUB_OUTPUT
+          echo "archive_name=${MOD_NAME}_${VERSION}" >> $GITHUB_OUTPUT
+          echo "Read: Mod=$MOD_NAME, Version=$VERSION"
+
+      - name: Check if release exists
+        id: check_release
+        run: |
+          if gh release view v${{ steps.read_info.outputs.version }} > /dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Release v${{ steps.read_info.outputs.version }} already exists"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "Release v${{ steps.read_info.outputs.version }} does not exist"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Increment version
+        if: steps.check_release.outputs.exists == 'true'
+        id: increment_version
+        run: |
+          CURRENT_VERSION="${{ steps.read_info.outputs.version }}"
+          
+          # Split version into major.minor.patch
+          IFS='.' read -ra VERSION_PARTS <<< "$CURRENT_VERSION"
+          MAJOR="${VERSION_PARTS[0]}"
+          MINOR="${VERSION_PARTS[1]}"
+          PATCH="${VERSION_PARTS[2]}"
+          
+          # Increment patch version
+          PATCH=$((PATCH + 1))
+          NEW_VERSION="$MAJOR.$MINOR.$PATCH"
+          
+          echo "New version: $NEW_VERSION"
+          
+          # Update info.json with new version
+          jq --arg version "$NEW_VERSION" '.version = $version' info.json > info.json.tmp
+          mv info.json.tmp info.json
+          
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Commit and push version bump
+        if: steps.check_release.outputs.exists == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add info.json
+          git commit -m "Bump version to ${{ steps.increment_version.outputs.new_version }}"
+          git push
+
+      - name: Trigger workflow again with new version
+        if: steps.check_release.outputs.exists == 'true'
+        run: |
+          gh workflow run release.yml
+          echo "Workflow triggered again with new version ${{ steps.increment_version.outputs.new_version }}"
+          exit 0
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create release directory structure
+        if: steps.check_release.outputs.exists == 'false'
+        run: |
+          ARCHIVE_NAME="${{ steps.read_info.outputs.archive_name }}"
+          
+          # Create the directory structure
+          mkdir -p "$ARCHIVE_NAME"
+          
+          # Copy all mod files to the directory
+          # Exclude .git, .github, and other non-mod files
+          rsync -av \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='.gitignore' \
+            --exclude='.gitattributes' \
+            --exclude='*.zip' \
+            ./ "$ARCHIVE_NAME"/
+          
+          # Create the zip file
+          zip -r "${ARCHIVE_NAME}.zip" "$ARCHIVE_NAME"
+          
+          echo "Created ${ARCHIVE_NAME}.zip with structure ${ARCHIVE_NAME}/"
+          
+          # Verify the structure
+          echo "Archive contents:"
+          unzip -l "${ARCHIVE_NAME}.zip" | head -20
+
+      - name: Create GitHub Release
+        if: steps.check_release.outputs.exists == 'false'
+        run: |
+          gh release create "${{ steps.read_info.outputs.release_tag }}" \
+            "${{ steps.read_info.outputs.archive_name }}.zip" \
+            --title "Release ${{ steps.read_info.outputs.version }}" \
+            --notes "Release of ${{ steps.read_info.outputs.mod_name }} version ${{ steps.read_info.outputs.version }}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload release artifact
+        if: steps.check_release.outputs.exists == 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.read_info.outputs.archive_name }}
+          path: ${{ steps.read_info.outputs.archive_name }}.zip
